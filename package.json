@@ -1,31 +1,47 @@
 {
-    "name": "leaflet-almostover",
-    "version": "1.0.1",
-    "description": "",
-    "keywords": [
-        "Leaflet",
-        "GIS"
-    ],
-    "main": "src/leaflet.almostover.js",
-    "bugs": {
-        "url": "https://github.com/makinacorpus/Leaflet.AlmostOver/issues"
-    },
-    "repository": {
-        "type": "git",
-        "url": "git://github.com/makinacorpus/Leaflet.AlmostOver.git"
-    },
-    "license": "MIT",
-    "scripts": {
-        "test": "mocha-phantomjs test/index.html"
-    },
-    "peerDependencies": {
-        "leaflet": "0.7.x",
-        "leaflet-geometryutil": "*"
-    },
-    "devDependencies": {
-        "mocha": "3.0.x",
-        "chai": "3.5.x",
-        "sinon": "1.17.x",
-        "mocha-phantomjs": "4.1.x"
-    }
+  "name": "leaflet-2-almostover",
+  "version": "1.0.0",
+  "description": "",
+  "keywords": [
+    "Leaflet",
+    "GIS"
+  ],
+  "type": "module",
+  "exports": {
+    ".": "./dist/leaflet.almostover.js"
+  },
+  "main": "./dist/leaflet.almostover.js",
+  "module": "src/leaflet.almostover.js",
+  "browser": "dist/leaflet.almostover.js",
+  "license": "MIT",
+  "scripts": {
+    "test": "npm run lint",
+    "lint": "eslint \"src/**/*.js\" --fix",
+    "clean": "rm -rf dist",
+    "copy": "shx cp src/* dist",
+    "minify": "uglifyjs-folder src -e -o dist",
+    "prebuild": "npm run clean && mkdir -p dist",
+    "buildold": "npm run test && npm run copy && npm run minify",
+    "build": "rollup -c build/rollup.config.js",
+    "dev": "npm-run-all --print-label --parallel serve",
+    "serve": "http-server"
+  },
+  "peerDependencies": {
+    "leaflet": "2.0.0-alpha"
+  },
+  "devDependencies": {
+    "@rollup/plugin-commonjs": "^28.0.6",
+    "@rollup/plugin-node-resolve": "^16.0.1",
+    "@rollup/plugin-terser": "^0.4.4",
+    "eslint": "^9.30.1",
+    "globals": "^16.3.0",
+    "http-server": "^14.1.1",
+    "leaflet": "2.0.0-alpha",
+    "npm-run-all": "^4.1.5",
+    "rollup": "^4.44.1",
+    "shx": "^0.4.0"
+  },
+  "dependencies" : {
+    "leaflet-2-geometryutil": "1.0.0"
+  }
 }

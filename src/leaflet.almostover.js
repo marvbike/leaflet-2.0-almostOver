@@ -1,150 +1,169 @@
-L.Map.mergeOptions({
+import {Map, Handler, Util} from 'leaflet';
+import {closestLayerSnap} from 'leaflet-2-geometryutil';
+
+// Extend Leaflet's Map options with AlmostOver options
+Map.mergeOptions({
     // @option almostOver: Boolean = true
     // Set it to false to disable this plugin
     almostOver: true,
+
     // @option almostDistance: Number = 25
-    // Tolerance in pixels
-    almostDistance: 25,   // pixels
+    // Tolerance in pixels to consider a layer "almost over"
+    almostDistance: 25,
+
     // @option almostSamplingPeriod: Number = 50
-    // To reduce the 'mousemove' event frequency. In milliseconds
-    almostSamplingPeriod: 50,  // ms
-    // @option almostOnMouseMove Boolean = true
-    // Set it to false to disable track 'mousemove' events and improve performance
-    // if AlmostOver is only need for 'click' events.
+    // Time in ms to throttle mousemove events for performance.
+    almostSamplingPeriod: 50,
+
+    // @option almostOnMouseMove: Boolean = true
+    // Set to false to disable mousemove tracking and only use clicks.
     almostOnMouseMove: true,
 });
 
 
-L.Handler.AlmostOver = L.Handler.extend({
+/**
+ * @class AlmostOverHandler
+ * @extends L.Handler
+ *
+ * This handler fires 'almost:over', 'almost:out', and 'almost:move' events on the map
+ * when the mouse is near a layer. It also fires 'almost:click' and 'almost:dblclick'.
+ *
+ * It requires the Leaflet.GeometryUtil plugin.
+ */
+export class AlmostOverHandler extends Handler {
 
-    includes: L.Evented || L.Mixin.Events,
-
-    initialize: function (map) {
+    initialize (map) {
         this._map = map;
         this._layers = [];
         this._previous = null;
         this._marker = null;
         this._buffer = 0;
 
-        // Reduce 'mousemove' event frequency
-        this.__mouseMoveSampling = (function () {
-            var timer = new Date();
-            return function (e) {
-                var date = new Date(),
-                    filtered = (date - timer) < this._map.options.almostSamplingPeriod;
-                if (filtered || this._layers.length === 0) {
-                    return;  // Ignore movement
-                }
-                timer = date;
-                this._map.fire('mousemovesample', {latlng: e.latlng});
-            };
-        })();
-    },
+        // A throttled version of the mousemove handler
+        this._mouseMoveSampler = Util.throttle(this._onMouseMove, this._map.options.almostSamplingPeriod, this);
+    }
 
-    addHooks: function () {
+    /**
+     * Adds the necessary event listeners to the map.
+     */
+    addHooks () {
         if (this._map.options.almostOnMouseMove) {
-            this._map.on('mousemove', this.__mouseMoveSampling, this);
-            this._map.on('mousemovesample', this._onMouseMove, this);
+            this._map.on('mousemove', this._mouseMoveSampler, this);
         }
         this._map.on('click dblclick', this._onMouseClick, this);
 
-        var map = this._map;
-        function computeBuffer() {
-            this._buffer = this._map.layerPointToLatLng([0, 0]).lat -
-                           this._map.layerPointToLatLng([this._map.options.almostDistance,
-                                                         this._map.options.almostDistance]).lat;
-        }
+        // A listener to compute the buffer distance in map units
+        const computeBuffer = () => {
+            if (!this._map) return;
+            const p1 = this._map.layerPointToLatLng([0, 0]);
+            const p2 = this._map.layerPointToLatLng([this._map.options.almostDistance, this._map.options.almostDistance]);
+            this._buffer = p1.distanceTo(p2);
+        };
+
         this._map.on('viewreset zoomend', computeBuffer, this);
         this._map.whenReady(computeBuffer, this);
-    },
+    }
 
-    removeHooks: function () {
-        this._map.off('mousemovesample');
-        this._map.off('mousemove', this.__mouseMoveSampling, this);
+    /**
+     * Removes the event listeners from the map.
+     */
+    removeHooks () {
+        this._map.off('mousemove', this._mouseMoveSampler, this);
         this._map.off('click dblclick', this._onMouseClick, this);
-    },
+        // Note: 'viewreset' and 'zoomend' listeners for computeBuffer are not removed,
+        // as they are lightweight and handler removal is not always guaranteed.
+    }
 
-    addLayer: function (layer) {
-        if (typeof layer.eachLayer == 'function') {
-            layer.eachLayer(function (l) {
-                this.addLayer(l);
-            }, this);
-        }
-        else {
-            if (typeof this.indexLayer == 'function') {
-                this.indexLayer(layer);
-            }
+    /**
+     * Adds a layer to be considered for "almost over" events.
+     * @param {L.Layer} layer
+     */
+    addLayer (layer) {
+        if (typeof layer.eachLayer === 'function') {
+            layer.eachLayer(l => this.addLayer(l), this);
+        } else {
+            // If using a spatial index like LayerIndexMixin, you would index it here.
+            // e.g., if (typeof this.indexLayer === 'function') { this.indexLayer(layer); }
             this._layers.push(layer);
         }
-    },
+    }
 
-    removeLayer: function (layer) {
-        if (typeof layer.eachLayer == 'function') {
-            layer.eachLayer(function (l) {
-                this.removeLayer(l);
-            }, this);
-        }
-        else {
-            if (typeof this.unindexLayer == 'function') {
-                this.unindexLayer(layer);
-            }
-            var index = this._layers.indexOf(layer);
-            if (0 <= index) {
+    /**
+     * Removes a layer from "almost over" consideration.
+     * @param {L.Layer} layer
+     */
+    removeLayer (layer) {
+        if (typeof layer.eachLayer === 'function') {
+            layer.eachLayer(l => this.removeLayer(l), this);
+        } else {
+            // If using a spatial index, you would unindex it here.
+            // e.g., if (typeof this.unindexLayer === 'function') { this.unindexLayer(layer); }
+            const index = this._layers.indexOf(layer);
+            if (index >= 0) {
                 this._layers.splice(index, 1);
             }
         }
         this._previous = null;
-    },
+    }
 
-    getClosest: function (latlng) {
-        var snapfunc = L.GeometryUtil.closestLayerSnap,
-            distance = this._map.options.almostDistance;
+    /**
+     * Finds the closest layer to a given LatLng.
+     * @param {L.LatLng} latlng
+     * @returns {Object|null} An object with layer, latlng, and distance, or null.
+     */
+    getClosest (latlng) {
+        const distance = this._map.options.almostDistance;
+        let snaplist = this._layers;
 
-        var snaplist = [];
-        if (typeof this.searchBuffer == 'function') {
-            snaplist = this.searchBuffer(latlng, this._buffer);
-        }
-        else {
-            snaplist = this._layers;
-        }
-        return snapfunc(this._map, snaplist, latlng, distance, false);
-    },
+        // If using a spatial index, you would search it here for efficiency.
+        // e.g., if (typeof this.searchBuffer === 'function') {
+        //   snaplist = this.searchBuffer(latlng, this._buffer);
+        // }
 
-    _onMouseMove: function (e) {
-        var closest = this.getClosest(e.latlng);
+        return closestLayerSnap(this._map, snaplist, latlng, distance, false);
+    }
+
+    /**
+     * Handles the throttled mousemove event.
+     * @private
+     * @param {L.MouseEvent} e
+     */
+    _onMouseMove (e) {
+        if (!e.latlng) return;
+
+        const closest = this.getClosest(e.latlng);
+
         if (closest) {
             if (!this._previous) {
-                this._map.fire('almost:over', {layer: closest.layer,
-                                               latlng: closest.latlng});
-            }
-            else if (L.stamp(this._previous.layer) != L.stamp(closest.layer)) {
+                // Fire 'over' event if mouse enters a layer's proximity
+                this._map.fire('almost:over', {layer: closest.layer, latlng: closest.latlng});
+            } else if (Util.stamp(this._previous.layer) !== Util.stamp(closest.layer)) {
+                // Fire 'out' and 'over' if mouse moves from one layer's proximity to another
                 this._map.fire('almost:out', {layer: this._previous.layer});
-                this._map.fire('almost:over', {layer: closest.layer,
-                                               latlng: closest.latlng});
+                this._map.fire('almost:over', {layer: closest.layer, latlng: closest.latlng});
             }
 
-            this._map.fire('almost:move', {layer: closest.layer,
-                                           latlng: closest.latlng});
-        }
-        else {
-            if (this._previous) {
+            // Fire 'move' event while mouse is in proximity
+            this._map.fire('almost:move', {layer: closest.layer, latlng: closest.latlng});
+        } else if (this._previous) {
+                // Fire 'out' event if mouse leaves a layer's proximity
                 this._map.fire('almost:out', {layer: this._previous.layer});
             }
-        }
         this._previous = closest;
-    },
+    }
 
-    _onMouseClick: function (e) {
-        var closest = this.getClosest(e.latlng);
+    /**
+     * Handles click and dblclick events.
+     * @private
+     * @param {L.MouseEvent} e
+     */
+    _onMouseClick (e) {
+        const closest = this.getClosest(e.latlng);
         if (closest) {
-            this._map.fire('almost:' + e.type, {layer: closest.layer,
-                                                latlng: closest.latlng});
+            this._map.fire(`almost:${e.type}`, {layer: closest.layer, latlng: closest.latlng});
         }
-    },
-});
-
-if (L.LayerIndexMixin !== undefined) {
-    L.Handler.AlmostOver.include(L.LayerIndexMixin);
+    }
 }
 
-L.Map.addInitHook('addHandler', 'almostOver', L.Handler.AlmostOver);
+// Add the handler to the map's initialization hooks
+Map.addInitHook('addHandler', 'almostOver', AlmostOverHandler);
